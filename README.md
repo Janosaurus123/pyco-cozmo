@@ -390,3 +390,5 @@ Disclaimer
 
 This project is not affiliated with [Digital Dream Labs](https://www.digitaldreamlabs.com/) or
 [Anki](https://anki.com/).
+#   p y c o - c o z m o  
+ 
