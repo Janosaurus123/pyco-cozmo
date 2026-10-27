@@ -19,6 +19,7 @@ from . import protocol_encoder
 
 __all__ = [
     "load_wav",
+    "samples_to_packets",
 ]
 
 
@@ -26,12 +27,21 @@ MULAW_MAX = 0x7FFF
 MULAW_BIAS = 132
 
 
-def load_wav(filename: str) -> List[protocol_encoder.OutputAudio]:
-    """ Load a WAVE file into a list of OutputAudio packets. """
+def load_wav(source) -> List[protocol_encoder.OutputAudio]:
+    """Load a WAVE file into a list of OutputAudio packets.
+
+    ``source`` may be a filename, a file-like object, or the WAVE file
+    contents as bytes.
+    """
+
+    import io
 
     start_time = time.perf_counter()
 
-    with wave.open(filename, "r") as w:
+    if isinstance(source, (bytes, bytearray, memoryview)):
+        source = io.BytesIO(bytes(source))
+
+    with wave.open(source, "r") as w:
         sampwidth = w.getsampwidth()
         framerate = w.getframerate()
         if sampwidth != 2 or (framerate != 22050 and framerate != 48000):
@@ -63,6 +73,22 @@ def bytes_to_cozmo(byte_string: bytes, rate_correction: int, channels: int) -> b
     for i, s in enumerate(bs):
         out[i] = u_law_encoding(s)
     return out
+
+
+def samples_to_packets(samples) -> List[protocol_encoder.OutputAudio]:
+    """Pack raw 8-bit u-law samples into OutputAudio packets.
+
+    Each packet carries 744 samples.  The final packet is padded with the
+    u-law encoding of silence (0xff).
+    """
+    data = bytes(samples)
+    pkts = []
+    for offset in range(0, len(data), 744):
+        chunk = data[offset:offset + 744]
+        if len(chunk) < 744:
+            chunk += b"\xff" * (744 - len(chunk))
+        pkts.append(protocol_encoder.OutputAudio(samples=chunk))
+    return pkts
 
 
 def u_law_encoding(sample: int) -> int:

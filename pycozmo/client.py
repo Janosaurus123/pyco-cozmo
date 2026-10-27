@@ -4,9 +4,10 @@ Cozmo protocol client and high-level API.
 
 """
 
-from threading import Event
+from threading import Event, Timer
 from typing import Optional, Tuple
 import json
+import math
 import time
 import io
 
@@ -15,6 +16,7 @@ from PIL import Image
 
 from . import logger, logger_robot, logger_animation
 from . import protocol_encoder
+from .protocol_base import UnknownCommand
 from . import event
 from . import camera
 from . import object
@@ -78,6 +80,12 @@ class Client(event.Dispatcher):
         self.robot_orientation = robot.RobotOrientation.ON_THREADS
         self.robot_picked_up = False
         self.robot_moving = False
+        self.cliff_data_raw = (0, 0, 0, 0)
+        self.backpack_touch_sensor_raw = 0
+        self.current_path_segment = 0
+        self.lift_motor_enabled = None
+        self._lift_was_commanded = False
+        self._manual_image_timer = None
         # Animation state
         self.num_anim_bytes_played = 0
         self.num_audio_frames_played = 0
@@ -86,6 +94,7 @@ class Client(event.Dispatcher):
         self.client_drop_count = 0
         # Camera state
         self.last_image_timestamp = None
+        self._latest_image = None
         # Object state
         self.available_objects = dict()
         self.connected_objects = dict()
@@ -112,6 +121,7 @@ class Client(event.Dispatcher):
         self.add_handler(protocol_encoder.ObjectAvailable, self._on_object_available)
         self.add_handler(protocol_encoder.ObjectConnectionState, self._on_object_connection_state)
         self.add_handler(protocol_encoder.DebugData, self._on_debug_data)
+        self.add_handler(UnknownCommand, self._on_unknown_command)
         self.add_handler(event.EvtRobotPickedUpChange, self._on_robot_picked_up)
         self.add_handler(event.EvtRobotWheelsMovingChange, self._on_robot_moving)
         self.conn.start()
@@ -209,6 +219,11 @@ class Client(event.Dispatcher):
 
     def _on_image_chunk(self, cli, pkt: protocol_encoder.ImageChunk):
         del cli
+        # The timestamp is refreshed from every chunk.  Older firmware reports
+        # zero in the first chunk of an image and the real timestamp in the
+        # later chunks (see upstream issue #55).
+        if pkt.frame_timestamp:
+            self._partial_image_timestamp = pkt.frame_timestamp
         if self._partial_image_id is not None and pkt.chunk_id == 0:
             if not self._partial_invalid:
                 logger.debug("Lost final chunk of image - discarding.")
@@ -288,6 +303,9 @@ class Client(event.Dispatcher):
         self.battery_voltage = pkt.battery_voltage
         self.accel = util.Vector3(pkt.accel_x, pkt.accel_y, pkt.accel_z)
         self.gyro = util.Vector3(pkt.gyro_x, pkt.gyro_y, pkt.gyro_z)
+        self.cliff_data_raw = tuple(pkt.cliff_data_raw)
+        self.backpack_touch_sensor_raw = pkt.backpack_touch_sensor_raw
+        self.current_path_segment = pkt.curr_path_segment
         old_status = self.robot_status
         self.robot_status = pkt.status
         self.dispatch(event.EvtRobotStateUpdated, self)
@@ -361,6 +379,99 @@ class Client(event.Dispatcher):
         msg = robot_debug.get_debug_message(pkt.name_id, pkt.format_id, pkt.args)
         logger_robot.log(robot_debug.get_log_level(pkt.level), msg)
 
+    def _on_unknown_command(self, cli, pkt: UnknownCommand):
+        """Handle protocol commands which are not (yet) formally declared.
+
+        Command 0xd8 is emitted by newer firmware and indicates whether the
+        lift motor is enabled.  When it is disabled while the application is
+        trying to move the lift, the robot has most likely detected that the
+        motor is overpowered (for example, when the lift is blocked).
+        """
+        del cli
+        if pkt.id == 0xd8 and pkt.data:
+            enabled = bool(pkt.data[-1])
+            if self.lift_motor_enabled is not enabled:
+                self.lift_motor_enabled = enabled
+                logger.debug("Lift motor enabled: %s", enabled)
+                self.dispatch(event.EvtLiftMotorEnabledChange, self, enabled)
+                if not enabled and self._lift_was_commanded:
+                    self.dispatch(event.EvtLiftOverpowered, self)
+                    self._lift_was_commanded = False
+
+    def _status_flag(self, flag: int) -> bool:
+        return bool(self.robot_status & flag)
+
+    @property
+    def is_moving(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_MOVING)
+
+    @property
+    def is_carrying_block(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_CARRYING_BLOCK)
+
+    @property
+    def is_picking_or_placing(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_PICKING_OR_PLACING)
+
+    @property
+    def is_picked_up(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_PICKED_UP)
+
+    @property
+    def is_falling(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_FALLING)
+
+    @property
+    def is_animating(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_ANIMATING)
+
+    @property
+    def is_pathing(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_PATHING)
+
+    @property
+    def is_on_charger(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_ON_CHARGER)
+
+    @property
+    def latest_image(self):
+        """ The most recent camera image, or ``None`` before the first frame. """
+        return self._latest_image
+
+    @property
+    def is_charging(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.IS_CHARGING)
+
+    @property
+    def is_cliff_detected(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.CLIFF_DETECTED)
+
+    @property
+    def lift_in_position(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.LIFT_IN_POS)
+
+    @property
+    def head_in_position(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.HEAD_IN_POS)
+
+    @property
+    def wheels_moving(self) -> bool:
+        return self._status_flag(robot.RobotStatusFlag.ARE_WHEELS_MOVING)
+
+    @property
+    def accelerometer(self) -> util.Vector3:
+        """Acceleration along the x, y and z axes."""
+        return self.accel
+
+    @property
+    def gyro_reading(self) -> util.Vector3:
+        """Angular velocity around the x, y and z axes."""
+        return self.gyro
+
+    @property
+    def battery_voltage_volts(self) -> float:
+        return self.battery_voltage
+
     def set_head_angle(self, angle: float, accel: float = 10.0, max_speed: float = 10.0,
                        duration: float = 0.0):
         pkt = protocol_encoder.SetHeadAngle(angle_rad=angle, accel_rad_per_sec2=accel,
@@ -373,12 +484,19 @@ class Client(event.Dispatcher):
 
     def set_lift_height(self, height: float, accel: float = 10.0, max_speed: float = 10.0,
                         duration: float = 0.0):
+        self._lift_was_commanded = True
         pkt = protocol_encoder.SetLiftHeight(height_mm=height, accel_rad_per_sec2=accel,
                                              max_speed_rad_per_sec=max_speed, duration_sec=duration)
         self.conn.send(pkt)
 
     def move_lift(self, speed: float) -> None:
+        self._lift_was_commanded = True
         pkt = protocol_encoder.MoveLift(speed_rad_per_sec=speed)
+        self.conn.send(pkt)
+
+    def start_motor_calibration(self, head: bool = True, lift: bool = True) -> None:
+        """Start calibration of the head and/or lift motors."""
+        pkt = protocol_encoder.StartMotorCalibration(head=head, lift=lift)
         self.conn.send(pkt)
 
     def drive_wheels(self, lwheel_speed: float, rwheel_speed: float,
@@ -392,10 +510,147 @@ class Client(event.Dispatcher):
             self.stop_all_motors()
 
     def stop_all_motors(self) -> None:
+        self._lift_was_commanded = False
         pkt = protocol_encoder.StopAllMotors()
         self.conn.send(pkt)
 
-    def go_to_pose(self, pose: util.Pose, relative_to_robot: bool = False) -> None:
+    def drive_straight(self, speed: float, duration: Optional[float] = None,
+                       lwheel_speed: Optional[float] = None,
+                       rwheel_speed: Optional[float] = None) -> None:
+        """Drive both wheels at the same speed.
+
+        Args:
+            speed: Forward speed in mm/s (negative values drive backwards).
+            duration: If provided, stop the motors after this many seconds.
+            lwheel_speed: Optional override for the left wheel.
+            rwheel_speed: Optional override for the right wheel.
+        """
+        self.drive_wheels(
+            lwheel_speed if lwheel_speed is not None else speed,
+            rwheel_speed if rwheel_speed is not None else speed,
+            duration=duration)
+
+    def turn_in_place(self, angle: float, speed: float = 1.0,
+                      accel: float = 2.0, tolerance: float = 0.01) -> None:
+        """Turn to an absolute heading in radians.
+
+        Args:
+            angle: Target heading in radians.
+            speed: Angular speed in radians per second.
+            accel: Angular acceleration in radians per second squared.
+            tolerance: Heading tolerance in radians.
+        """
+        pkt = protocol_encoder.TurnInPlace(
+            angle_rad=angle, speed_rad_per_sec=speed, accel_rad_per_sec2=accel,
+            angle_tolerance_rad=tolerance, unknown4=0, unknown5=0,
+            is_absolute=True, action_id=0)
+        self.conn.send(pkt)
+
+    def turn_in_place_at_speed(self, speed: float, direction: int = 1,
+                               accel: float = 2.0) -> None:
+        """Rotate continuously at a given wheel speed.
+
+        Args:
+            speed: Wheel speed in mm/s.
+            direction: 1 for counter-clockwise, -1 for clockwise.
+            accel: Wheel acceleration in mm/s2.
+        """
+        pkt = protocol_encoder.TurnInPlaceAtSpeed(
+            wheel_speed_mmps=abs(speed), wheel_accel_mmps2=accel,
+            direction=1 if direction >= 0 else -1)
+        self.conn.send(pkt)
+
+    def drive_wheel_motors(self, lwheel_speed: float, rwheel_speed: float,
+                           duration: Optional[float] = None) -> None:
+        """Alias for :meth:`drive_wheels`, provided for SDK compatibility."""
+        self.drive_wheels(lwheel_speed, rwheel_speed, duration=duration)
+
+    def enable_stop_on_cliff(self, enable: bool = True) -> None:
+        pkt = protocol_encoder.EnableStopOnCliff(enable=enable)
+        self.conn.send(pkt)
+
+    def set_camera_params(self, gain: float = 0.0, exposure_ms: int = 0,
+                          auto_exposure_enabled: bool = True) -> None:
+        pkt = protocol_encoder.SetCameraParams(
+            gain=gain, exposure_ms=exposure_ms,
+            auto_exposure_enabled=auto_exposure_enabled)
+        self.conn.send(pkt)
+
+    def set_manual_exposure(self, gain: float, exposure_ms: int) -> None:
+        """Set a fixed camera gain and exposure time."""
+        self.set_camera_params(gain=gain, exposure_ms=exposure_ms,
+                               auto_exposure_enabled=False)
+
+    def set_robot_volume(self, level: int) -> None:
+        """Alias for :meth:`set_volume`."""
+        self.set_volume(level)
+
+    def drive_off_charger_contacts(self, speed: float = -50.0,
+                                   duration: float = 1.5) -> None:
+        """Drive backwards off the charging contacts.
+
+        The robot does not expose a dedicated command for this, so the motion
+        is time based.  Cliff detection is temporarily disabled because the
+        charger contacts can otherwise be mistaken for a cliff.
+        """
+        was_on_charger = self.is_on_charger
+        self.enable_stop_on_cliff(False)
+        try:
+            self.drive_wheels(speed, speed, duration=duration)
+        finally:
+            self.enable_stop_on_cliff(True)
+        if was_on_charger:
+            logger.debug("Drove off charger contacts.")
+
+    def drive_onto_charger(self, speed: float = 50.0, timeout: float = 5.0) -> bool:
+        """Drive forward until the robot reports that it is on the charger.
+
+        Returns ``True`` if the charger was reached before ``timeout``.
+        """
+        if self.is_on_charger:
+            return True
+        reached = Event()
+        result = False
+        handler = self.add_handler(
+            event.EvtRobotOnChargerChange,
+            lambda _cli, state: reached.set() if state else None)
+        self.enable_stop_on_cliff(False)
+        try:
+            self.drive_wheels(speed, speed, lwheel_acc=20.0, rwheel_acc=20.0)
+            result = reached.wait(timeout)
+        finally:
+            self.stop_all_motors()
+            self.enable_stop_on_cliff(True)
+            self.del_handler(event.EvtRobotOnChargerChange, handler)
+        return bool(result)
+
+    def backup_onto_charger(self, speed: float = -50.0, timeout: float = 5.0) -> bool:
+        """Back up onto the charger, returning whether it was reached."""
+        return self.drive_onto_charger(speed=speed, timeout=timeout)
+
+    def wait_for_pose(self, pose: util.Pose, tolerance: float = 10.0,
+                      angle_tolerance: float = 0.1, timeout: float = 30.0) -> None:
+        """Wait until the robot reaches a pose within the given tolerances."""
+        reached = Event()
+
+        def on_state(_cli):
+            dx = self.pose.position.x - pose.position.x
+            dy = self.pose.position.y - pose.position.y
+            da = self.pose.rotation.angle_z.radians - pose.rotation.angle_z.radians
+            da = math.atan2(math.sin(da), math.cos(da))
+            if math.hypot(dx, dy) <= tolerance and abs(da) <= angle_tolerance:
+                reached.set()
+
+        handler = self.add_handler(event.EvtRobotStateUpdated, on_state)
+        try:
+            if not reached.wait(timeout):
+                raise exception.Timeout("Timeout waiting for pose.")
+        finally:
+            self.del_handler(event.EvtRobotStateUpdated, handler)
+
+    def go_to_pose(self, pose: util.Pose, relative_to_robot: bool = False,
+                   timeout: Optional[float] = 60.0,
+                   speed: float = 100.0, turn_speed: float = 40.0) -> None:
         """ Move to a specific pose (position and orientation). """
 
         if relative_to_robot:
@@ -405,25 +660,30 @@ class Client(event.Dispatcher):
         pkt = protocol_encoder.AppendPathSegLine(
             from_x=self.pose.position.x, from_y=self.pose.position.y,
             to_x=pose.position.x, to_y=pose.position.y,
-            speed_mmps=100.0, accel_mmps2=20.0, decel_mmps2=20.0)
+            speed_mmps=speed, accel_mmps2=20.0, decel_mmps2=20.0)
         self.conn.send(pkt)
         pkt = protocol_encoder.AppendPathSegPointTurn(
             x=pose.position.x, y=pose.position.y,
             angle_rad=pose.rotation.angle_z.radians,
             angle_tolerance_rad=0.01,
-            speed_mmps=40.0, accel_mmps2=20.0, decel_mmps2=20.0)
+            speed_mmps=turn_speed, accel_mmps2=20.0, decel_mmps2=20.0)
         self.conn.send(pkt)
-        pkt = protocol_encoder.ExecutePath(event_id=1)
+        event_id = (self.tag + 1) & 0xffff
+        pkt = protocol_encoder.ExecutePath(event_id=event_id)
         self.conn.send(pkt)
 
         e = Event()
 
         def event_wait(_, pkt2: protocol_encoder.PathFollowingEvent):
-            if pkt2.event_type != protocol_encoder.PathEventType.PATH_STARTED:
+            if pkt2.event_id == event_id and pkt2.event_type != protocol_encoder.PathEventType.PATH_STARTED:
                 e.set()
 
-        self.add_handler(protocol_encoder.PathFollowingEvent, event_wait)
-        e.wait()
+        handler = self.add_handler(protocol_encoder.PathFollowingEvent, event_wait)
+        try:
+            if not e.wait(timeout):
+                raise exception.Timeout("Timeout waiting for path following to complete.")
+        finally:
+            self.del_handler(protocol_encoder.PathFollowingEvent, handler)
 
     def set_backpack_lights(self, left_light, front_light, center_light, rear_light, right_light) -> None:
         pkt = protocol_encoder.LightStateCenter(states=(front_light, center_light, rear_light))
@@ -453,18 +713,36 @@ class Client(event.Dispatcher):
         pkt = protocol_encoder.EnableColorImages(enable=color)
         self.conn.send(pkt)
 
+    def _cancel_manual_image_timer(self) -> None:
+        if self._manual_image_timer is not None:
+            self._manual_image_timer.cancel()
+            self._manual_image_timer = None
+
     def clear_screen(self) -> None:
+        """Clear the OLED display and resume procedural faces."""
+        self._cancel_manual_image_timer()
+        self.anim_controller.clear_image()
         pkt = protocol_encoder.DisplayImage(image=b"\x3f\x3f")
-        self.anim_controller.display_image(pkt)
+        self.anim_controller.display_image(pkt, manual=False)
 
     def display_image(self, im: Image, duration: Optional[float] = None) -> None:
+        """Display a still image on the robot's OLED display.
+
+        If ``duration`` is provided the image is cleared after that many
+        seconds.  Without a duration the image remains until
+        :meth:`clear_screen` is called or another image is displayed.  The
+        procedural face generator is suspended while a manual image is shown
+        (upstream issue #48).
+        """
+        self._cancel_manual_image_timer()
         encoder = image_encoder.ImageEncoder(im)
         buf = bytes(encoder.encode())
         pkt = protocol_encoder.DisplayImage(image=buf)
-        self.anim_controller.display_image(pkt)
+        self.anim_controller.display_image(pkt, manual=True)
         if duration is not None:
-            time.sleep(duration)
-            self.clear_screen()
+            self._manual_image_timer = Timer(duration, self.clear_screen)
+            self._manual_image_timer.daemon = True
+            self._manual_image_timer.start()
 
     def _load_clips(self, fspec: str) -> None:
 
@@ -568,9 +846,35 @@ class Client(event.Dispatcher):
         pkt = protocol_encoder.SetRobotVolume(level=level)
         self.conn.send(pkt)
 
-    def play_audio(self, fspec: str) -> None:
-        pkts = audio.load_wav(fspec)
+    def play_audio(self, fspec) -> None:
+        """Play a WAVE file or raw PCM/ulaw sample data through the speaker.
+
+        ``fspec`` may be a filename, a file-like object, or raw 22 kHz,
+        16-bit mono WAVE bytes.
+        """
+        if isinstance(fspec, (bytes, bytearray, memoryview)):
+            import io as _io
+            pkts = audio.load_wav(_io.BytesIO(bytes(fspec)))
+        elif hasattr(fspec, "read"):
+            pkts = audio.load_wav(fspec)
+        else:
+            pkts = audio.load_wav(fspec)
         self.anim_controller.play_audio(pkts)
+
+    def play_audio_samples(self, samples) -> None:
+        """Play already encoded 8-bit u-law samples."""
+        from . import audio as _audio
+        self.anim_controller.play_audio(_audio.samples_to_packets(samples))
+
+    def say(self, text: str, voice: Optional[str] = None, rate: Optional[int] = None) -> None:
+        """Speak ``text`` through the robot's speaker.
+
+        Requires an optional TTS backend (espeak-ng, pyttsx3, macOS ``say`` or
+        Windows SAPI).  See :mod:`pycozmo.tts` for details.
+        """
+        from . import tts
+        data = tts.synthesize_wav(text, voice=voice, rate=rate)
+        self.play_audio(data)
 
     def activate_behavior(self, behavior):
         self.add_child_dispatcher(behavior)

@@ -5,10 +5,9 @@ Activity representation and reading.
 """
 
 import os
+import random
 import time
-from typing import Dict, List, Optional
-
-import numpy as np
+from typing import Any, Dict, List, Optional
 
 from . import logger
 from .emotions import DecayGraph, Node
@@ -16,26 +15,54 @@ from .json_loader import get_json_files, load_json_file
 
 
 __all__ = [
+    "BehaviorChooser",
+    "Objective",
     "Activity",
+    "BehaviorsActivity",
+    "VoiceCommandActivity",
+    "FeedingActivity",
+    "FreeplayActivity",
+    "SparkedActivity",
+    "PyramidActivity",
+    "SocializeActivity",
+    "NeedsActivity",
+    "from_dict",
 
     "load_activities",
 ]
 
 
 class BehaviorChooser:
+    """ Choose behavior IDs according to a behavior-system strategy.
+
+    Supported strategies:
+
+    ``Selection``
+        Use the configured order as-is.
+    ``StrictPriority``
+        Try behaviors in the configured order, one per iteration.
+    ``Scoring``
+        Weighted random order without replacement.  Scores are reduced by a
+        per-behavior repetition penalty.
+    """
+
     __slots__ = [
         "choice_type",
         "behaviors",
         "iteration",
+        "rng",
         "__dict__",
     ]
 
     def __init__(self,
                  choice_type: str,
-                 behaviors: List) -> None:
+                 behaviors: List,
+                 rng: Optional[random.Random] = None) -> None:
 
         self.choice_type = str(choice_type)
-        self.behaviors = behaviors
+        self.behaviors = list(behaviors or [])
+        self.rng = rng or random.Random()
+        self.iteration = 0
 
         if self.choice_type == 'Scoring':
             self.init_scores()
@@ -44,67 +71,125 @@ class BehaviorChooser:
     @classmethod
     def from_json(cls, data: Dict):
         return cls(
-            choice_type=data['type'],
+            choice_type=data.get('type', 'Selection'),
             behaviors=data.get('behaviors', [])
         )
 
     def reset(self):
         self.iteration = 0
-        self.init_scores()
+        if self.choice_type == 'Scoring':
+            self.init_scores()
 
     def init_scores(self) -> None:
         self.behavior_scores = []
         self.behavior_names = []
         self.behavior_repetitions = []
-        for b in self.behaviors:
-            self.behavior_scores.append(b['scoring']['flatScore'])
-            self.behavior_names.append(b['behaviorID'])
+        for behavior in self.behaviors:
+            scoring = behavior.get('scoring', {}) if isinstance(behavior, dict) else {}
+            self.behavior_scores.append(float(scoring.get('flatScore', 1.0)))
+            name = behavior.get('behaviorID', behavior) if isinstance(behavior, dict) else behavior
+            self.behavior_names.append(str(name))
             self.behavior_repetitions.append(0)
         self.total_score = sum(self.behavior_scores)
 
     def init_repetition_penalty(self) -> None:
         self.repetition_penaltys = []
-        for b in self.behaviors:
-            if 'repetitionPenalty' in b['scoring']:
+        for behavior in self.behaviors:
+            scoring = behavior.get('scoring', {}) if isinstance(behavior, dict) else {}
+            penalty = scoring.get('repetitionPenalty')
+            if penalty and 'nodes' in penalty:
                 self.repetition_penaltys.append(
-                    DecayGraph([Node(x=n['x'], y=n['y']) for n in b['scoring']['repetitionPenalty']['nodes']]))
+                    DecayGraph([Node(x=n['x'], y=n['y']) for n in penalty['nodes']]))
             else:
                 self.repetition_penaltys.append(DecayGraph([Node(x=1, y=0)]))
 
+    def _index(self, ref: Any) -> int:
+        if isinstance(ref, int):
+            return ref
+        name = ref
+        if isinstance(ref, dict):
+            name = ref.get('behaviorID', ref)
+        name = str(name)
+        try:
+            return self.behavior_names.index(name)
+        except ValueError:
+            return -1
+
     def apply_repetition_penalty(self, ref) -> None:
-        if self.choice_type == 'Scoring':
-            if isinstance(ref, str):
-                idx = self.behavior_names.index(ref)
-            elif isinstance(ref, int):
-                idx = ref
-            else:
-                raise TypeError('Invalid behavior index: {}'.format(ref))
-            self.behavior_repetitions[idx] += 1
-            self.behavior_scores[idx] -= self.repetition_penaltys[idx].get_increment(self.behavior_repetitions[idx])
-            self.behavior_scores[idx] = max(0, self.behavior_scores[idx])
-            self.total_score = sum(self.behavior_scores)
+        if self.choice_type != 'Scoring':
+            return
+        idx = self._index(ref)
+        if idx < 0:
+            return
+        self.behavior_repetitions[idx] += 1
+        self.behavior_scores[idx] -= self.repetition_penaltys[idx].get_increment(self.behavior_repetitions[idx])
+        self.behavior_scores[idx] = max(0, self.behavior_scores[idx])
+        self.total_score = sum(self.behavior_scores)
 
-    def get_sorted_choices(self) -> List[str]:
+    def _names(self) -> List[str]:
+        return [str(behavior.get('behaviorID', behavior)
+                    if isinstance(behavior, dict) else behavior)
+                for behavior in self.behaviors]
+
+    def get_sorted_choices(self) -> Optional[List[str]]:
+        """ Return available behavior IDs in the order they should be tried. """
+        names = self._names()
         if self.choice_type == 'Selection':
-            return None
+            return names
         if self.choice_type == 'StrictPriority':
-            if self.iteration <= len(self.behaviors):
-                return self.behaviors
-            else:
+            if self.iteration < len(names):
+                return names[self.iteration:]
+            return None
+        if self.choice_type == 'Scoring':
+            if not names:
                 return None
-        elif self.choice_type == 'Scoring':
-            if self.behavior_names and self.behavior_scores:
-                probability_distribution = []
-                for s in self.behavior_scores:
-                    probability_distribution.append(float(s) / self.total_score)
+            remaining = list(names)
+            scores = dict(zip(self.behavior_names, self.behavior_scores))
+            ordered: List[str] = []
+            while remaining:
+                weights = [max(1e-9, float(scores.get(name, 1.0))) for name in remaining]
+                total = sum(weights)
+                pick = self.rng.random() * total
+                cumulative = 0.0
+                index = len(remaining) - 1
+                for i, weight in enumerate(weights):
+                    cumulative += weight
+                    if pick <= cumulative:
+                        index = i
+                        break
+                ordered.append(remaining.pop(index))
+            return ordered
+        raise ValueError('Unknown choice type: {}'.format(self.choice_type))
 
-                val = np.random.choice(self.behavior_names, p=probability_distribution,
-                                       size=len(np.nonzero(probability_distribution)[0]), replace=False)
-                return val
-            else:
-                return None
-        else:
-            raise ValueError('Unknown choice type: {}'.format(self.choice_type))
+    def choose(self, available: Optional[Any] = None) -> Optional[str]:
+        """ Return the first available behavior, notifying the chooser.
+
+        ``available`` may be a callable, a collection of behavior IDs, or
+        ``None`` to accept every configured behavior.
+        """
+        choices = self.get_sorted_choices()
+        if not choices:
+            return None
+        for behavior_id in choices:
+            if self.is_available(behavior_id, available):
+                self.iteration += 1
+                self.apply_repetition_penalty(behavior_id)
+                return behavior_id
+        return None
+
+    @staticmethod
+    def is_available(behavior_id: str, available: Optional[Any]) -> bool:
+        if available is None:
+            return True
+        if callable(available):
+            try:
+                return bool(available(behavior_id))
+            except TypeError:
+                return bool(available())
+        try:
+            return behavior_id in available
+        except TypeError:
+            return True
 
 
 class Objective:
@@ -131,7 +216,7 @@ class Objective:
         self.random_completions_needed_min = \
             int(random_completions_needed_min) if random_completions_needed_min is not None else 0
         self.random_completions_needed_max = \
-            int(random_completions_needed_min) if random_completions_needed_max is not None else 0
+            int(random_completions_needed_max) if random_completions_needed_max is not None else 0
 
     @classmethod
     def from_json(cls, data: Dict):
@@ -161,16 +246,24 @@ class Activity:
         self.type = str(activity_type)
         self.strategy = str(strategy)
 
-    def choose(self):
-        # TODO: method to choose from list of options
-        # Some notes for this:
-        # The Behavior chooser will provide a list of behaviors to try one at the time.
-        # Since some behaviors will not always be available (like DriveOffCharger or ReactToObstacle), a method is
-        # required to check wether a behavior can be run or not, and then execute it.
-        # Once a behavior is executed, the behavior chooser needs to be notified of the action using
-        # apply_repetition_penalty()
-        # Until we have a better defined structure of the brain, this cannot be finished.
-        pass
+    def available(self, context: Optional[Dict[str, Any]] = None) -> bool:
+        """ Return whether this activity can run in ``context``. """
+        return True
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        """ Return the next behavior or sub-activity, if this activity has one.
+
+        The base activity has no behavior chooser and returns ``None``.
+        """
+        return None
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "activityID": self.id,
+            "activityType": self.type,
+            "activityStrategy": {"type": self.strategy},
+        }
 
 
 class BehaviorsActivity(Activity):
@@ -192,6 +285,21 @@ class BehaviorsActivity(Activity):
             activity_id=data['activityID'],
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        if self.behavior_chooser is None:
+            return None
+        available = context.get("available_behaviors") if context else None
+        return self.behavior_chooser.choose(available)
+
+    def choose_behaviors(self, context: Optional[Dict[str, Any]] = None) -> List[str]:
+        if self.behavior_chooser is None:
+            return []
+        return self.behavior_chooser.get_sorted_choices() or []
+
+    def available(self, context: Optional[Dict[str, Any]] = None) -> bool:
+        return self.behavior_chooser is not None and bool(self.behavior_chooser.behaviors)
 
 
 class VoiceCommandActivity(Activity):
@@ -225,6 +333,19 @@ class FeedingActivity(Activity):
             activity_id=data['activityID'],
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        choices = list(self.universal_chooser or ())
+        available = context.get("available_behaviors") if context else None
+        if available is not None and not callable(available):
+            choices = [item for item in choices if item in available]
+        if not choices:
+            return None
+        return (rng or random).choice(choices)
+
+    def available(self, context: Optional[Dict[str, Any]] = None) -> bool:
+        return bool(self.universal_chooser)
 
 
 class FreeplayActivity(Activity):
@@ -262,6 +383,26 @@ class FreeplayActivity(Activity):
             activity_id=data['activityID'],
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
+
+    def choose_sub_activity(self, context: Optional[Dict[str, Any]] = None) -> str:
+        """ Pick the sub-activity that matches the current face/cube situation. """
+        context = context or {}
+        face = bool(context.get("face_visible", context.get("faces", False)))
+        cube = bool(context.get("cube_visible", context.get("cubes", False)))
+        if face and cube:
+            return self.face_and_cube_activity
+        if face:
+            return self.face_only_activity
+        if cube:
+            return self.cube_only_activity
+        return self.no_face_no_cube_activity
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        return self.choose_sub_activity(context)
+
+    def available(self, context: Optional[Dict[str, Any]] = None) -> bool:
+        return True
 
 
 class SparkedActivity(Activity):
@@ -339,6 +480,25 @@ class SparkedActivity(Activity):
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
 
+    def available(self, context: Optional[Dict[str, Any]] = None) -> bool:
+        required = self.require_spark.lower()
+        if required in ("", "none", "false", "no", "nospark"):
+            return True
+        if required in ("true", "yes", "spark", "required", "requirespark"):
+            return bool((context or {}).get("spark", True))
+        return True
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        if not self.available(context):
+            return None
+        if self.sub_activity_delegate is not None and (context or {}).get("use_sub_activity"):
+            return self.sub_activity_delegate.choose(context, rng)
+        if self.behavior_chooser is not None:
+            available = (context or {}).get("available_behaviors")
+            return self.behavior_chooser.choose(available)
+        return None
+
 
 class PyramidActivity(Activity):
     __slots__ = [
@@ -373,6 +533,16 @@ class PyramidActivity(Activity):
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
 
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        context = context or {}
+        if context.get("pyramid_built") and self.interlude_chooser is not None:
+            return self.interlude_chooser.choose(context.get("available_behaviors"))
+        chooser = self.build_chooser if context.get("pyramid_started") else self.setup_chooser
+        if chooser is None:
+            return None
+        return chooser.choose(context.get("available_behaviors"))
+
 
 class SocializeActivity(Activity):
     __slots__ = [
@@ -380,6 +550,7 @@ class SocializeActivity(Activity):
         "interlude_chooser",
         "max_face_iterations",
         "required_objectives",
+        "face_iterations",
     ]
 
     def __init__(self,
@@ -392,6 +563,7 @@ class SocializeActivity(Activity):
         self.interlude_chooser = interlude_chooser
         self.max_face_iterations = int(max_face_iterations)
         self.required_objectives = required_objectives
+        self.face_iterations = 0
 
         super().__init__(*args, **kwargs)
 
@@ -401,10 +573,31 @@ class SocializeActivity(Activity):
             behavior_chooser=BehaviorChooser.from_json(data['behaviorChooser']),
             interlude_chooser=BehaviorChooser.from_json(data['interludeBehaviorChooser']),
             max_face_iterations=data['maxNumFindFacesSearchIterations'],
-            required_objectives=[Objective.from_json(d) for d in data['requiredObjectives']],
+            required_objectives=[Objective.from_json(d) for d in data.get('requiredObjectives', [])],
             activity_id=data['activityID'],
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        context = context or {}
+        face = bool(context.get("face_visible", context.get("faces", False)))
+        if face:
+            self.face_iterations += 1
+            chooser = self.behavior_chooser
+        elif self.face_iterations >= self.max_face_iterations:
+            chooser = self.interlude_chooser
+        else:
+            chooser = self.behavior_chooser
+        if chooser is None:
+            return None
+        return chooser.choose(context.get("available_behaviors"))
+
+    def reset(self) -> None:
+        self.face_iterations = 0
+        for chooser in (self.behavior_chooser, self.interlude_chooser):
+            if chooser is not None:
+                chooser.reset()
 
 
 class NeedsActivity(Activity):
@@ -425,6 +618,12 @@ class NeedsActivity(Activity):
             activity_id=data['activityID'],
             activity_type=data['activityType'],
             strategy=data['activityStrategy']['type'])
+
+    def choose(self, context: Optional[Dict[str, Any]] = None,
+               rng: Optional[random.Random] = None) -> Optional[str]:
+        if self.behavior_chooser is None:
+            return None
+        return self.behavior_chooser.choose((context or {}).get("available_behaviors"))
 
 
 def from_dict(info: Dict) -> Activity:
@@ -460,30 +659,54 @@ def from_dict(info: Dict) -> Activity:
         )
 
 
-def load_activities(resource_dir: str) -> Dict[str, Activity]:
-    """ Load activity map from cozmo resources. """
+def _activity_items(json_data: Any) -> List[Dict]:
+    """ Extract activity dictionaries from the resource file shapes. """
+    if isinstance(json_data, list):
+        return [item for item in json_data if isinstance(item, dict) and 'activityID' in item]
+    if not isinstance(json_data, dict):
+        return []
+    if 'activityID' in json_data:
+        return [json_data]
+    for key in ('activities', 'activityList'):
+        value = json_data.get(key)
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict) and 'activityID' in item]
+    return []
 
-    # TODO: cozmo_resources/config/engine/needs_action_config.json
-    # TODO: cozmo_resources/config/engine/do_a_trick_weights.json
+
+def load_activities(resource_dir: str) -> Dict[str, Activity]:
+    """ Load activity map from Cozmo resources.
+
+    The behavior-system activity files are loaded along with the needs-action
+    and trick-weight configuration files, which contain activity references
+    in several different shapes.  Non-activity sections are ignored rather
+    than causing the whole resource set to fail.
+    """
 
     start_time = time.perf_counter()
 
     activity_folders = [
         os.path.join('cozmo_resources', 'config', 'engine', 'behaviorSystem', 'activities_config.json'),
         os.path.join('cozmo_resources', 'config', 'engine', 'behaviorSystem', 'behavior_system_config.json'),
-        os.path.join('cozmo_resources', 'config', 'engine', 'behaviorSystem', 'activities')
+        os.path.join('cozmo_resources', 'config', 'engine', 'behaviorSystem', 'activities'),
+        os.path.join('cozmo_resources', 'config', 'engine', 'needs_action_config.json'),
+        os.path.join('cozmo_resources', 'config', 'engine', 'do_a_trick_weights.json'),
     ]
     activity_files = get_json_files(resource_dir, activity_folders)
 
     activities = {}
 
     for filename in activity_files:
-        json_data = load_json_file(filename)
-        if isinstance(json_data, list):
-            for activity in json_data:
+        try:
+            json_data = load_json_file(filename)
+        except Exception as exc:
+            logger.warning("Failed to load activity file '{}': {}".format(filename, exc))
+            continue
+        for activity in _activity_items(json_data):
+            try:
                 activities[activity['activityID']] = from_dict(activity)
-        else:
-            activities[json_data['activityID']] = from_dict(json_data)
+            except (KeyError, TypeError, ValueError) as exc:
+                logger.warning("Skipping malformed activity in '{}': {}".format(filename, exc))
 
     logger.debug("Loaded {} activities in {:.02f} s.".format(len(activities), time.perf_counter() - start_time))
 

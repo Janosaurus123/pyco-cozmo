@@ -1,0 +1,18 @@
+include README.md
+include CHANGES.md
+include CONTRIBUTING.md
+include PUBLISHING.md
+include LICENSE.md
+include NOTICE
+include pyproject.toml
+include setup.cfg
+include setup.py
+include requirements.txt
+include requirements-dev.txt
+include mypy.ini
+
+recursive-include docs *.md *.rst *.py *.bat Makefile
+recursive-include examples *.py
+recursive-include pycozmo *.fbs *.png *.py
+recursive-include tools *.py
+recursive-include .github *.yml

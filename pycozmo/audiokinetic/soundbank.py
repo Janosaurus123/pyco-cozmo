@@ -10,7 +10,8 @@ References:
 
 from typing import BinaryIO, Iterable, Dict, Any
 import struct
-from chunk import Chunk
+
+from .chunk import Chunk
 
 from . import exception
 from . import soundbanksinfo

@@ -1,16 +1,25 @@
 
-PyCozmo
-=======
+PyCozmo (pyco-cozmo)
+====================
+
+[![CI](https://github.com/Janosaus123/pyco-cozmo/actions/workflows/ci.yml/badge.svg)](https://github.com/Janosaus123/pyco-cozmo/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/pyco-cozmo.svg)](https://pypi.org/project/pyco-cozmo/)
+[![Python versions](https://img.shields.io/pypi/pyversions/pyco-cozmo.svg)](https://pypi.org/project/pyco-cozmo/)
 
 `PyCozmo` is a pure-Python communication library, alternative SDK, and application for the
-[Cozmo robot](https://www.digitaldreamlabs.com/pages/cozmo) . It allows controlling a Cozmo robot directly, without
-having to go through a mobile device, running the Cozmo app.
+[Cozmo robot](https://www.digitaldreamlabs.com/pages/cozmo). It allows controlling a Cozmo robot directly, without
+having to go through a mobile device, running the Cozmo app.  It also includes off-board vision, navigation,
+personality, voice, music and animation tools, plus readers for Anki Vector animation files.
+
+This repository is the `pyco-cozmo` distribution, an enhanced fork of the original
+[PyCozmo project](https://github.com/zayfod/pycozmo). Install it with `pip install pyco-cozmo`; the Python
+import name remains `pycozmo`.
 
 The library is loosely based on the [Anki Cozmo Python SDK](https://github.com/anki/cozmo-python-sdk) and the
 [cozmoclad](https://pypi.org/project/cozmoclad/) ("C-Like Abstract Data") library.
 
 This project is a tool for exploring the hardware and software of the Digital Dream Labs (originally Anki) Cozmo robot.
-It is unstable and heavily under development.
+The low-level protocol implementation is stable; the higher-level application modules continue to evolve.
 
 
 Usage
@@ -44,10 +53,67 @@ cli.stop()
 ```
 
 
+Feature overview
+----------------
+
+- **Protocol and robot control** - Cozmo UDP protocol, animations, audio, camera,
+  cubes, charger, firmware updates, and the original tools.
+- **Personality engine** - traits, drives, emotions, decay, event reactions, and
+  activity/behavior scoring (`pycozmo.personality`).
+- **Behaviors and activities** - sequential and random animation behaviors, cliff
+  reactions, drive-off-charger, behavior choosers, and resource loaders
+  (`pycozmo.behavior`, `pycozmo.activity`).
+- **Computer vision** - motion, faces, expressions, recognition, pets, robots,
+  cubes, platform/charger detection, custom markers, ArUco markers, calibration,
+  drivable-area estimation, and tracking (`pycozmo.vision`).  OpenCV is optional.
+- **Navigation** - occupancy grids, map building, A* planning, path
+  simplification, and path following (`pycozmo.navigation`).
+- **Text-to-speech and songs** - espeak/SAPI/macOS/pyttsx3 backends and a small
+  pure-Python song notation and synthesizer (`pycozmo.tts`, `pycozmo.songs`).
+- **Voice commands** - a dependency-free command parser/executor and an optional
+  `SpeechRecognition` wrapper (`pycozmo.voice`).
+- **Vector animations and behaviors** - read Vector `.bin` FlatBuffers files,
+  convert common tracks to Cozmo clips, play them, and drive animation-based
+  behaviors (`pycozmo.vector`).
+- **Discovery and Wi-Fi** - cross-platform network scanning, connection helpers,
+  and robot discovery (`pycozmo.wifi`, `pycozmo.discovery`).
+
+Quick examples:
+
+```python
+from pycozmo import vision
+
+pipeline = vision.VisionPipeline(vision.VisionConfig(faces=True, cubes=True))
+result = pipeline.process(image)
+annotated = result.annotate(image)
+```
+
+```python
+from pycozmo import personality
+
+mood = personality.Personality.playful()
+mood.update(dt=10.0)
+mood.react("EvtFaceObserved")
+activity_id = mood.choose_activity(activities)
+```
+
+```python
+from pycozmo import songs
+
+song = songs.parse("C4/4 D4/4 E4/4 G4/4 C5/2")
+songs.play(cli, song)
+```
+
+See [docs/offboard_functions.md](docs/offboard_functions.md) for details and the
+[examples](examples) directory for runnable programs.
+
+
 Documentation
 -------------
 
-[https://pycozmo.readthedocs.io/](https://pycozmo.readthedocs.io/)
+- [Off-board functions and new modules](docs/offboard_functions.md)
+- [Protocol and architecture](docs/architecture.md)
+- [Upstream API documentation](https://pycozmo.readthedocs.io/) (does not cover fork-only modules)
 
 
 Robot Support
@@ -74,7 +140,7 @@ Actuators:
 - [x] Cube LEDs
 - [x] Platform LEDs (when available)
 
-On-board functions (see [docs/functions.md](docs/functions.md) for details:
+On-board functions (see [docs/functions.md](docs/functions.md) for details):
 - [x] Wi-Fi AP
 - [x] Bluetooth LE
 - [x] Localization
@@ -82,32 +148,32 @@ On-board functions (see [docs/functions.md](docs/functions.md) for details:
 - [x] NV RAM storage
 - [x] Over-the-air (OTA) firmware updates
 
-Off-board functions (see [docs/offboard_functions.md](docs/offboard_functions.md) for details:
+Off-board functions (see [docs/offboard_functions.md](docs/offboard_functions.md) for details):
 - [x] Procedural face generation
 - [x] Cozmo animations from FlatBuffers .bin files
-- [ ] Personality engine - work in progress
-- [ ] Cozmo behaviors - work in progress
-- [ ] Motion detection
-- [ ] Object (cube and platform) detection
-- [ ] Cube marker recognition
-- [ ] Face detection
-- [ ] Face recognition
-- [ ] Facial expression estimation
-- [ ] Pet detection
-- [ ] Camera calibration
-- [ ] Navigation map building
-- [ ] Text-to-speech
-- [ ] Songs
+- [x] Personality engine
+- [x] Cozmo behaviors
+- [x] Motion detection
+- [x] Object (cube and platform) detection
+- [x] Cube marker recognition
+- [x] Face detection
+- [x] Face recognition
+- [x] Facial expression estimation
+- [x] Pet detection
+- [x] Camera calibration
+- [x] Navigation map building
+- [x] Text-to-speech
+- [x] Songs
 
 Extra off-board functions:
-- [ ] Vector animations from FlatBuffers .bin files
-- [ ] Vector behaviors
-- [ ] ArUco marker recognition
-- [ ] Cozmo and Vector robot detection
-- [ ] Drivable area estimation
-- [ ] Voice commands
+- [x] Vector animations from FlatBuffers .bin files
+- [x] Vector behaviors
+- [x] ArUco marker recognition
+- [x] Cozmo and Vector robot detection
+- [x] Drivable area estimation
+- [x] Voice commands
 
-If you have ideas for other functionality [share them via GitHub](https://github.com/zayfod/pycozmo/issues).
+If you have ideas for other functionality [share them via GitHub](https://github.com/Janosaus123/pyco-cozmo/issues).
 
 
 Tools
@@ -122,6 +188,8 @@ Tools
     Cozmo.
 - [pycozmo_anim.py](tools/pycozmo_anim.py) - a tool for examining and manipulating animation files.
 - [pycozmo_update.py](tools/pycozmo_update.py) - a tool for over-the-air (OTA) updates of Cozmo's firmware.
+- [pycozmo_discover.py](tools/pycozmo_discover.py) - scans Wi-Fi and probes robot
+    addresses (`pycozmo-discover` after installation).
 - [pycozmo_protocol_generator.py](tools/pycozmo_protocol_generator.py) - a tool for generating Cozmo protocol encoder
     code.
 
@@ -160,6 +228,15 @@ Advanced:
     expressions ([video](https://youtu.be/UyMTEOG2FyU))
 - [anim.py](examples/anim.py) - demonstrates animating Cozmo
 
+Off-board and Vector:
+- [discovery.py](examples/discovery.py) - scans for Cozmo/Vector robots
+- [vision.py](examples/vision.py) - runs the vision pipeline on camera frames and saves an annotated image
+- [navigation.py](examples/navigation.py) - builds an occupancy grid, plans a path and follows it
+- [personality.py](examples/personality.py) - updates a personality and chooses an activity
+- [tts_song.py](examples/tts_song.py) - speaks text and plays a generated song
+- [voice_commands.py](examples/voice_commands.py) - parses and executes typed or spoken commands
+- [vector_anim.py](examples/vector_anim.py) - loads and plays a Vector animation file
+
 
 PyCozmo In The Wild
 -------------------
@@ -184,6 +261,24 @@ A Wi-Fi connection needs to be established with Cozmo before using PyCozmo appli
 
 [This video](https://www.youtube.com/watch?v=-k_oiQhBa5o) summarizes the connection process.
 
+The same steps can be automated:
+
+```python
+from pycozmo import discovery, wifi
+
+networks = wifi.find_cozmo_networks()
+if networks:
+    connection = wifi.connect(networks[0].ssid, password="123456")
+    print(connection.to_dict())
+
+robot = discovery.find_robot()
+if robot:
+    print(robot)
+```
+
+`pycozmo-discover --networks` prints visible networks and robots, and
+`pycozmo-discover --json` emits machine-readable output.
+
 
 PyCozmo vs. the Cozmo SDK
 -------------------------
@@ -207,10 +302,18 @@ the low-level UDP communication with Cozmo.
 Requirements
 ------------
 
-- [Python](https://www.python.org/downloads/) 3.6.0 or newer
-- [Pillow](https://github.com/python-pillow/Pillow) 6.0.0 - Python image library
+- [Python](https://www.python.org/downloads/) 3.9 or newer (tested through 3.14)
+- [NumPy](https://numpy.org/) - array and image processing
+- [Pillow](https://github.com/python-pillow/Pillow) 6.0.0 or newer - Python image library
 - [FlatBuffers](https://github.com/google/flatbuffers) - serialization library
-- [dpkt](https://github.com/kbandla/dpkt) - TCP/IP packet parsing library 
+- [dpkt](https://github.com/kbandla/dpkt) - TCP/IP packet parsing library
+
+Optional extras:
+
+- `vision` - OpenCV for template matching, custom markers and ArUco detection
+- `tts` - `pyttsx3` on platforms without a built-in speech engine
+- `voice` - `SpeechRecognition` for microphone input
+- `all` - all of the above
 
 
 Installation
@@ -219,31 +322,39 @@ Installation
 Using pip:
 
 ```
-pip install --user pycozmo
+pip install pyco-cozmo
+pycozmo-resources download
+```
 
-pycozmo_resources.py download
+With optional features:
+
+```
+pip install "pyco-cozmo[all]"
 ```
 
 From source:
 
 ```
-git clone https://github.com/zayfod/pycozmo.git
-cd pycozmo
-python setup.py install --user
-
-pycozmo_resources.py download
+git clone https://github.com/Janosaus123/pyco-cozmo.git
+cd pyco-cozmo
+pip install .
+pycozmo-resources download
 ```
 
 From source, for development:
 
 ```
-git clone git@github.com:zayfod/pycozmo.git
-cd pycozmo
-python setup.py develop --user
-pip install --user -r requirements-dev.txt
-
-pycozmo_resources.py download
+git clone https://github.com/Janosaus123/pyco-cozmo.git
+cd pyco-cozmo
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev,all]"
+pycozmo-resources download
 ```
+
+The command-line tools are also installed as console scripts:
+`pycozmo-app`, `pycozmo-anim`, `pycozmo-discover`, `pycozmo-dump`,
+`pycozmo-replay`, `pycozmo-resources`, and `pycozmo-update`.
 
  
 Support
@@ -251,11 +362,27 @@ Support
 
 Bug reports and changes should be sent via GitHub:
 
+[https://github.com/Janosaus123/pyco-cozmo](https://github.com/Janosaus123/pyco-cozmo)
+
+Upstream project and original documentation:
+
 [https://github.com/zayfod/pycozmo](https://github.com/zayfod/pycozmo)
 
 DDL Robot Discord server, channel #development-cozmo:
 
 [https://discord.gg/ew92haS](https://discord.gg/ew92haS)
+
+
+Fork and attribution
+--------------------
+
+`pyco-cozmo` is an independent fork of [zayfod/pycozmo](https://github.com/zayfod/pycozmo).
+The original PyCozmo protocol implementation, tools, and documentation were created by
+Kaloyan Tenchov and the PyCozmo contributors. This fork adds the vision, navigation,
+personality, voice, music, discovery, and Vector modules documented above.
+
+The original project is available at [https://github.com/zayfod/pycozmo](https://github.com/zayfod/pycozmo)
+and on PyPI as [`pycozmo`](https://pypi.org/project/pycozmo/).
 
 
 Disclaimer

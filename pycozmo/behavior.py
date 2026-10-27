@@ -5,6 +5,7 @@ Behavior representation and reading.
 """
 
 import os
+import random
 import time
 from typing import Dict, Optional, Any
 
@@ -17,10 +18,25 @@ from .json_loader import get_json_files, load_json_file
 __all__ = [
     "ReactionTrigger",
     "Behavior",
+    "BehaviorPlayAnim",
+    "BehaviorPlayArbitraryAnim",
+    "BehaviorReactToCliff",
+    "BehaviorDriveOffCharger",
 
     "load_behaviors",
     "load_reaction_trigger_behavior_map",
 ]
+
+
+def _normalize_triggers(value: Any) -> list:
+    """ Accept a single trigger, a list, or a comma-separated string. """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [part.strip() for part in value.split(",") if part.strip()]
+    if isinstance(value, dict):
+        return [value] if value else []
+    return [item for item in value if item]
 
 
 class ReactionTrigger:
@@ -63,69 +79,165 @@ class Behavior(event.Dispatcher):
 
 
 class BehaviorPlayAnim(Behavior):
-    """ Play a sequence of animation triggers. """
+    """ Play a sequence of animation triggers.
+
+    ``animTriggers`` in the behavior configuration may be a single trigger
+    name or a list.  Each trigger is played when the previous animation
+    completes; after the last one :class:`~pycozmo.event.EvtBehaviorDone` is
+    posted.
+    """
 
     def __init__(self, cli: client.Client, conf: Any):
         super().__init__(cli, conf)
-        self.anim_triggers = conf.get("animTriggers", [])
+        self.anim_triggers = _normalize_triggers(conf.get("animTriggers", []))
         self.current_trigger = 0
+        self._active = False
+        self._done = False
         self.add_handler(event.EvtAnimationCompleted, self._on_animation_completed)
 
     def activate(self) -> None:
         self.current_trigger = 0
+        self._active = True
+        self._done = False
         if self.anim_triggers:
-            anim_trigger = self.anim_triggers[self.current_trigger]
-            self.current_trigger += 1
-            self.cli.play_anim_group(anim_trigger)
+            self._play_next()
+        else:
+            self._finish()
 
-    def _on_animation_completed(self, cli):
-        # TODO: Support additional animation triggers.
+    def _play_next(self) -> None:
+        if not self._active or self._done:
+            return
+        if self.current_trigger >= len(self.anim_triggers):
+            self._finish()
+            return
+        anim_trigger = self.anim_triggers[self.current_trigger]
+        self.current_trigger += 1
+        self.cli.play_anim_group(anim_trigger)
+
+    def _on_animation_completed(self, cli) -> None:
+        del cli
+        if self._active and not self._done:
+            self._play_next()
+
+    def _finish(self) -> None:
+        if self._done:
+            return
+        self._done = True
+        self._active = False
         self.cli.conn.post_event(event.EvtBehaviorDone, self.cli)
 
     def deactivate(self) -> None:
+        self._active = False
         self.cli.cancel_anim()
 
 
 class BehaviorPlayArbitraryAnim(BehaviorPlayAnim):
-    """ Play a random animation trigger. """
+    """ Play a random selection from the configured animation triggers. """
+
+    def __init__(self, cli: client.Client, conf: Any, rng: Optional[random.Random] = None):
+        super().__init__(cli, conf)
+        self.rng = rng or random.Random()
+        self._all_anim_triggers = list(self.anim_triggers)
 
     def activate(self) -> None:
-        # TODO: Pick random animation trigger and put it in sequence
+        triggers = list(self._all_anim_triggers)
+        if triggers:
+            self.rng.shuffle(triggers)
+            count = self.conf.get("numAnimations", self.conf.get("num_animations"))
+            try:
+                count = int(count)
+            except (TypeError, ValueError):
+                count = self.rng.randint(1, len(triggers))
+            count = max(1, min(len(triggers), count))
+            self.anim_triggers = triggers[:count]
         super().activate()
 
 
 class BehaviorReactToCliff(BehaviorPlayAnim):
-    """ ReactToCliff behavior - currently, just plays animation. """
+    """ ReactToCliff behavior - stop and play the reaction animation. """
 
     def activate(self) -> None:
-        self.anim_triggers = ("ReactToCliff", )
+        if hasattr(self.cli, "stop_all_motors"):
+            self.cli.stop_all_motors()
+        self.anim_triggers = ["ReactToCliff"]
         super().activate()
 
 
 class BehaviorDriveOffCharger(Behavior):
+    """ Drive backwards off the charging contacts.
+
+    The optional ``extraDistanceToDrive_mm`` configuration value is travelled
+    at ``driveSpeed_mmps`` (default ``50`` mm/s) after the contacts are
+    cleared.  Motion is time based because the robot does not report charger
+    contact state separately from the charging status.
+    """
+
+    def __init__(self, cli: client.Client, conf: Any) -> None:
+        super().__init__(cli, conf)
+        self._active = False
+        self._cancelled = False
 
     def activate(self) -> None:
-        # extraDistanceToDrive_mm = float(self.conf["extraDistanceToDrive_mm"])
-        # TODO: Play wake up animation?
-        # TODO: Drive and wait for completion.
-        self.cli.conn.post_event(event.EvtBehaviorDone, self.cli)
+        self._active = True
+        self._cancelled = False
+        speed = abs(float(self.conf.get("driveSpeed_mmps", 50.0)))
+        extra_distance = max(0.0, float(self.conf.get("extraDistanceToDrive_mm", 0.0)))
+        contact_time = max(0.0, float(self.conf.get("timeToDriveOffContacts_sec", 1.5)))
+
+        wake_trigger = self.conf.get("wakeUpAnimTrigger")
+        if wake_trigger and self.conf.get("playWakeUpAnim", False):
+            try:
+                self.cli.play_anim_group(wake_trigger)
+            except Exception as exc:  # pragma: no cover - hardware/asset dependent
+                logger.warning("Failed to play wake-up animation '{}': {}".format(wake_trigger, exc))
+
+        try:
+            if hasattr(self.cli, "drive_off_charger_contacts"):
+                self.cli.drive_off_charger_contacts(speed=-speed, duration=contact_time)
+            elif hasattr(self.cli, "drive_straight"):
+                self.cli.drive_straight(-speed, duration=contact_time)
+
+            if self._active and not self._cancelled and extra_distance > 0:
+                duration = extra_distance / max(speed, 1.0)
+                if hasattr(self.cli, "drive_straight"):
+                    self.cli.drive_straight(-speed, duration=duration)
+                elif hasattr(self.cli, "drive_wheels"):
+                    self.cli.drive_wheels(-speed, -speed, duration=duration)
+        except Exception as exc:
+            logger.error("DriveOffCharger failed: {}".format(exc))
+        finally:
+            self._active = False
+            if not self._cancelled:
+                self.cli.conn.post_event(event.EvtBehaviorDone, self.cli)
 
     def deactivate(self) -> None:
-        # TODO: Cancel
-        pass
+        self._cancelled = True
+        self._active = False
+        if hasattr(self.cli, "stop_all_motors"):
+            self.cli.stop_all_motors()
+
+
+#: Mapping used by :func:`get_behavior_class_from_dict`.  Applications may add
+#: their own behavior classes to this dictionary.
+BEHAVIOR_CLASSES = {
+    "PlayAnim": BehaviorPlayAnim,
+    "PlayArbitraryAnim": BehaviorPlayArbitraryAnim,
+    "ReactToCliff": BehaviorReactToCliff,
+    "DriveOffCharger": BehaviorDriveOffCharger,
+}
 
 
 def get_behavior_class_from_dict(data):
     """ Choose a behavior class, based on the behaviorClass JSON attribute. """
-    # TODO: Replace with a behavior package.
-    class_map = {
-        "PlayAnim": BehaviorPlayAnim,
-        "PlayArbitraryAnim": BehaviorPlayArbitraryAnim,
-        "ReactToCliff": BehaviorReactToCliff,
-        "DriveOffCharger": BehaviorDriveOffCharger,
-    }
-    cls = class_map.get(data["behaviorClass"], Behavior)
-    return cls
+    class_name = data.get("behaviorClass")
+    if class_name in BEHAVIOR_CLASSES:
+        return BEHAVIOR_CLASSES[class_name]
+    # Some resource files use a fully qualified name or a different case.
+    normalized = str(class_name or "").split(".")[-1].lower()
+    for key, value in BEHAVIOR_CLASSES.items():
+        if key.lower() == normalized:
+            return value
+    return Behavior
 
 
 def load_behaviors(resource_dir: str, cli: client.Client) -> Dict[str, Behavior]:

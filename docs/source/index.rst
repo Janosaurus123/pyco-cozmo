@@ -1,6 +1,6 @@
 
-PyCozmo
-=======
+PyCozmo (pyco-cozmo)
+====================
 
 .. toctree::
    :maxdepth: 2

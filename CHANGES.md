@@ -1,6 +1,21 @@
 Revision History
 ================
 
+v0.9.0 (Oct 27, 2026)
+---------------------
+- Published as the `pyco-cozmo` distribution; the Python import remains `pycozmo`.
+- Added Python 3.13/3.14 support and modern PEP 517/621 packaging with optional extras.
+- Added client helpers for lift, head, drive/turn, status, display timers, WAV/byte audio, and speech.
+- Added the off-board vision pipeline: motion, faces, expressions, pets, robots, cubes, platforms,
+  chargers, custom markers, ArUco markers, calibration, drivable-area estimation, and tracking.
+- Added navigation with occupancy grids, map building, A* planning, path simplification, and following.
+- Added the personality engine with traits, drives, emotions, decay, event reactions, and activity scoring.
+- Completed behavior and activity support, including random animation sequences, cliff reactions, and
+  drive-off-charger behavior.
+- Added text-to-speech, song notation/synthesis, voice commands, Wi-Fi helpers, and robot discovery.
+- Added Anki Vector animation parsing, conversion, playback, and animation-based behaviors.
+- Added examples, tests, documentation, and PyPI/GitHub publishing workflows.
+
 v0.8.0 (Nov 12, 2020)
 ---------------------
 - New animation controller that synchronizes animations, audio playback, and image displaying.

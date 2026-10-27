@@ -22,10 +22,10 @@ import pycozmo  # noqa
 
 # -- Project information -----------------------------------------------------
 
-project = 'PyCozmo'
+project = 'PyCozmo (pyco-cozmo)'
 # noinspection PyShadowingBuiltins
-copyright = '2019-2020, Kaloyan Tenchov'
-author = 'Kaloyan Tenchov'
+copyright = '2019-2026, Kaloyan Tenchov and pyco-cozmo contributors'
+author = 'Kaloyan Tenchov and pyco-cozmo contributors'
 
 # The full version, including alpha/beta/rc tags
 release = pycozmo.__version__
@@ -71,7 +71,7 @@ autodoc_default_flags = [
     'inherited-members',
 ]
 intersphinx_mapping = {
-    'python': ('https://docs.python.org/3.6', None),
+    'python': ('https://docs.python.org/3.9', None),
     'numpy': ('https://docs.scipy.org/doc/numpy/', None),
     'PIL': ('https://pillow.readthedocs.io/en/latest/', None),
 }

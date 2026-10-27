@@ -42,6 +42,12 @@ __all__ = [
     "EvtAnimationCompleted",
     "EvtReactionTrigger",
     "EvtBehaviorDone",
+    "EvtLiftMotorEnabledChange",
+    "EvtLiftOverpowered",
+    "EvtObjectDetected",
+    "EvtFaceDetected",
+    "EvtMotionDetected",
+    "EvtVoiceCommand",
 
     "STATUS_EVENTS",
 
@@ -188,6 +194,35 @@ class EvtReactionTrigger(Event):
 
 class EvtBehaviorDone(Event):
     pass
+
+
+class EvtLiftMotorEnabledChange(Event):
+    """Triggered when the lift motor enable state changes.
+
+    Newer firmware reports the state through command 0xd8.  When the motor is
+    disabled the lift is limp; this is usually caused by the motor being
+    overpowered or by a calibration failure.
+    """
+
+
+class EvtLiftOverpowered(Event):
+    """Triggered when the lift motor is unexpectedly disabled while moving."""
+
+
+class EvtObjectDetected(Event):
+    """Triggered when an off-board object detector finds an object."""
+
+
+class EvtFaceDetected(Event):
+    """Triggered when an off-board face detector finds a face."""
+
+
+class EvtMotionDetected(Event):
+    """Triggered when off-board motion detection observes movement."""
+
+
+class EvtVoiceCommand(Event):
+    """Triggered when a voice command has been recognized."""
 
 
 class Dispatcher(object):

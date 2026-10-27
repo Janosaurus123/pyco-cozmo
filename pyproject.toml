@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=77", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyco-cozmo"
+version = "0.9.0"
+description = "An enhanced pure-Python Cozmo SDK with vision, navigation, personality, voice, and Vector support."
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE.md", "NOTICE"]
+authors = [
+    { name = "Kaloyan Tenchov", email = "zayfod@gmail.com" },
+]
+maintainers = [
+    { name = "pyco-cozmo contributors" },
+]
+keywords = [
+    "anki",
+    "cozmo",
+    "robot",
+    "robotics",
+    "sdk",
+    "vector",
+    "vision",
+    "navigation",
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
+    "Operating System :: OS Independent",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Education",
+]
+dependencies = [
+    "dpkt",
+    "numpy",
+    "Pillow>=6.0.0",
+    "flatbuffers",
+]
+
+[project.optional-dependencies]
+vision = [
+    "opencv-python-headless>=4.6.0",
+]
+tts = [
+    "pyttsx3",
+]
+voice = [
+    "SpeechRecognition",
+]
+dev = [
+    "build",
+    "flake8",
+    "pytest",
+    "pytest-cov",
+    "twine",
+]
+docs = [
+    "Sphinx",
+    "recommonmark",
+]
+all = [
+    "opencv-python-headless>=4.6.0",
+    "pyttsx3",
+    "SpeechRecognition",
+]
+
+[project.urls]
+Homepage = "https://github.com/Janosaus123/pyco-cozmo"
+Repository = "https://github.com/Janosaus123/pyco-cozmo"
+Documentation = "https://github.com/Janosaus123/pyco-cozmo/blob/main/docs/offboard_functions.md"
+Issues = "https://github.com/Janosaus123/pyco-cozmo/issues"
+Changelog = "https://github.com/Janosaus123/pyco-cozmo/blob/main/CHANGES.md"
+
+[project.scripts]
+pycozmo-dump = "tools.pycozmo_dump:main"
+pycozmo-replay = "tools.pycozmo_replay:main"
+pycozmo-update = "tools.pycozmo_update:main"
+pycozmo-resources = "tools.pycozmo_resources:main"
+pycozmo-app = "tools.pycozmo_app:main"
+pycozmo-anim = "tools.pycozmo_anim:main"
+pycozmo-discover = "tools.pycozmo_discover:main"
+
+[tool.setuptools]
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["pycozmo*", "tools*"]
+
+[tool.setuptools.package-data]
+pycozmo = [
+    "CozmoAnim/*.fbs",
+    "CozmoAnim/*.py",
+    "expressions/*.py",
+    "assets/*",
+    "vector/*.fbs",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["pycozmo/tests", "pycozmo/audiokinetic/tests"]
+filterwarnings = [
+    "ignore:numElems is deprecated.:DeprecationWarning",
+]

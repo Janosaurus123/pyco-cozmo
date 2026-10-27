@@ -6,7 +6,7 @@ Emotion representation and reading.
 
 import os
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List, Optional, Tuple
 
 import numpy as np
 
@@ -61,23 +61,76 @@ class DecayGraph:
 
 
 class EmotionType:
-    """ Emotion type class. """
+    """ A decaying emotion value.
+
+    Args:
+        name: Emotion name.
+        decay_graph: Resource decay graph, kept for inspection and tuning.
+        repetition_penaly: Resource repetition penalty graph.
+        value: Initial intensity in the range 0..1.
+        baseline: Value the emotion decays towards.
+        decay_rate: Fraction of the distance to ``baseline`` removed per
+            second.  The default removes about 5% per second.
+    """
 
     __slots__ = [
         "name",
         "decay_graph",
-        "repetition_penalty"
+        "repetition_penalty",
+        "value",
+        "baseline",
+        "decay_rate",
+        "last_update",
     ]
 
-    def __init__(self, name: str, decay_graph: DecayGraph, repetition_penaly: DecayGraph) -> None:
+    def __init__(self,
+                 name: str,
+                 decay_graph: DecayGraph,
+                 repetition_penaly: DecayGraph,
+                 value: float = 0.0,
+                 baseline: float = 0.0,
+                 decay_rate: float = 0.05) -> None:
         self.name = str(name)
         self.decay_graph = decay_graph
         self.repetition_penalty = repetition_penaly
+        self.value = max(0.0, min(1.0, float(value)))
+        self.baseline = max(0.0, min(1.0, float(baseline)))
+        self.decay_rate = max(0.0, float(decay_rate))
+        self.last_update = time.monotonic()
 
-    def update(self):
-        """ Update from decay function. """
-        # TODO
-        pass
+    def _clamp(self) -> None:
+        self.value = max(0.0, min(1.0, self.value))
+
+    def add(self, amount: float) -> float:
+        """ Add to the emotion intensity and return the new value. """
+        self.value += float(amount)
+        self._clamp()
+        return self.value
+
+    def set(self, value: float) -> float:
+        """ Set the emotion intensity and return it. """
+        self.value = float(value)
+        self._clamp()
+        return self.value
+
+    def update(self, dt: Optional[float] = None) -> float:
+        """ Decay towards the baseline and return the new value.
+
+        With no ``dt`` argument the elapsed wall-clock time since the last
+        update is used.  The decay is exponential, so repeated calls are
+        stable at any frame rate.
+        """
+        now = time.monotonic()
+        if dt is None:
+            dt = now - self.last_update
+        self.last_update = now
+        dt = float(dt)
+        if dt <= 0:
+            return self.value
+        factor = min(1.0, self.decay_rate * dt)
+        self.value += (self.baseline - self.value) * factor
+        self._clamp()
+        return self.value
 
 
 class EmotionEvent:

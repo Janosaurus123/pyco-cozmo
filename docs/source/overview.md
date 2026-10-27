@@ -2,17 +2,19 @@
 Overview
 ========
 
-https://github.com/zayfod/pycozmo
+https://github.com/Janosaus123/pyco-cozmo
 
 `PyCozmo` is a pure-Python communication library, alternative SDK, and application for the
-[Cozmo robot](https://www.digitaldreamlabs.com/pages/cozmo) . It allows controlling a Cozmo robot directly, without
+[Cozmo robot](https://www.digitaldreamlabs.com/pages/cozmo). It allows controlling a Cozmo robot directly, without
 having to go through a mobile device, running the Cozmo app.
+
+This documentation covers the `pyco-cozmo` fork. The Python import name is `pycozmo`.
 
 The library is loosely based on the [Anki Cozmo Python SDK](https://github.com/anki/cozmo-python-sdk) and the
 [cozmoclad](https://pypi.org/project/cozmoclad/) ("C-Like Abstract Data") library.
 
 This project is a tool for exploring the hardware and software of the Digital Dream Labs (originally Anki) Cozmo robot.
-It is unstable and heavily under development.
+The low-level protocol implementation is stable; the higher-level application modules continue to evolve.
 
 
 Usage
@@ -68,10 +70,11 @@ the low-level UDP communication with Cozmo.
 Requirements
 ------------
 
-- [Python](https://www.python.org/downloads/) 3.6.0 or newer
-- [Pillow](https://github.com/python-pillow/Pillow) 6.0.0 - Python image library
+- [Python](https://www.python.org/downloads/) 3.9 or newer (tested through 3.14)
+- [NumPy](https://numpy.org/) - array and image processing
+- [Pillow](https://github.com/python-pillow/Pillow) 6.0.0 or newer - Python image library
 - [FlatBuffers](https://github.com/google/flatbuffers) - serialization library
-- [dpkt](https://github.com/kbandla/dpkt) - TCP/IP packet parsing library 
+- [dpkt](https://github.com/kbandla/dpkt) - TCP/IP packet parsing library
 
 
 Installation
@@ -80,30 +83,35 @@ Installation
 Using pip:
 
 ```
-pip install --user pycozmo
+pip install pyco-cozmo
 
-pycozmo_resources.py download
+pycozmo-resources download
+```
+
+With optional features:
+
+```
+pip install "pyco-cozmo[all]"
 ```
 
 From source:
 
 ```
-git clone https://github.com/zayfod/pycozmo.git
-cd pycozmo
-python setup.py install --user
-
-pycozmo_resources.py download
+git clone https://github.com/Janosaus123/pyco-cozmo.git
+cd pyco-cozmo
+pip install .
+pycozmo-resources download
 ```
 
 From source, for development:
 
 ```
-git clone git@github.com:zayfod/pycozmo.git
-cd pycozmo
-python setup.py develop --user
-pip install --user -r requirements-dev.txt
-
-pycozmo_resources.py download
+git clone https://github.com/Janosaus123/pyco-cozmo.git
+cd pyco-cozmo
+python -m venv .venv
+.venv\Scripts\activate
+pip install -e ".[dev,all]"
+pycozmo-resources download
 ```
 
  
@@ -111,6 +119,10 @@ Support
 -------
 
 Bug reports and changes should be sent via GitHub:
+
+[https://github.com/Janosaus123/pyco-cozmo](https://github.com/Janosaus123/pyco-cozmo)
+
+Upstream project:
 
 [https://github.com/zayfod/pycozmo](https://github.com/zayfod/pycozmo)
 

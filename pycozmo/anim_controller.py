@@ -94,6 +94,7 @@ class AnimationController:
         self.face_generator = iter(procedural_face.ProceduralFaceGenerator())
         self.animations_enabled = False
         self.procedural_face_enabled = False
+        self.manual_image = False
 
     def _clear_last_image_pkt(self):
         self.last_image_pkt = protocol_encoder.DisplayImage(image=b"\x3f\x3f")
@@ -173,7 +174,8 @@ class AnimationController:
                         self.cli.conn.post_event(event.EvtAudioCompleted, self.cli)
                 self.cli.conn.send(audio_pkt)
 
-                if not image_pkt and self.procedural_face_enabled and not self.playing_animation:
+                if not image_pkt and self.procedural_face_enabled and not self.playing_animation \
+                        and not self.manual_image:
                     image_pkt = self._get_face_image()
 
                 if image_pkt:
@@ -196,8 +198,14 @@ class AnimationController:
     def play_audio(self, pkts: List[protocol_encoder.OutputAudio]) -> None:
         self.queue.put_audio(pkts)
 
-    def display_image(self, pkt: protocol_encoder.DisplayImage) -> None:
+    def display_image(self, pkt: protocol_encoder.DisplayImage, manual: bool = True) -> None:
+        if manual:
+            self.manual_image = True
         self.queue.put_image(pkt)
+
+    def clear_image(self) -> None:
+        """Resume procedural face generation."""
+        self.manual_image = False
 
     def play_anim_frame(
             self,

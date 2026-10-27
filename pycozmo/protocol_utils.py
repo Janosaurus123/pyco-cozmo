@@ -4,7 +4,6 @@ Cozmo protocol encoding helper classes and functions.
 
 """
 
-from typing import Dict, Tuple
 import struct
 
 
